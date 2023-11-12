@@ -1,0 +1,90 @@
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from scipy.stats import norm, rankdata
+from scipy.optimize import minimize
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Function to fetch historical stock price data from Yahoo Finance
+def fetch_stock_data(ticker, start_date, end_date):
+    stock_data = yf.download(ticker, start=start_date, end=end_date)
+    return stock_data['Adj Close']
+
+# Set the start and end dates for historical data
+start_date = '2021-01-01'
+end_date = '2023-11-23'  # Updated to November 23, 2023
+
+# Fetch historical stock price data for AMAT and MRNA
+amat_data = fetch_stock_data('AMAT', start_date, end_date)
+mrna_data = fetch_stock_data('MRNA', start_date, end_date)
+
+# Combine the data into a single DataFrame
+data = pd.DataFrame({'AMAT': amat_data, 'MRNA': mrna_data})
+
+# Calculate daily returns
+returns = data.pct_change().dropna()
+
+# Step 1: Data Transformation
+data_transformed = returns.apply(rankdata) / (len(returns) + 1)
+
+# Step 2: Gaussian Copula Modeling
+def negative_log_likelihood(params, data):
+    rho = params[0]
+    z = norm.ppf(data)
+    copula_density = np.linalg.det(np.corrcoef(z.T) + np.eye(z.shape[1]) * 1e-6) ** (-0.5)
+    return -np.sum(np.log(copula_density))
+
+# Step 3: Parameter Estimation
+initial_params = [0.5]  # Initial guess for the correlation coefficient
+result = minimize(negative_log_likelihood, initial_params, args=(data_transformed,), method='Nelder-Mead')
+
+if result.success:
+    correlation_coefficient = result.x[0]
+    print(f"Correlation Coefficient: {correlation_coefficient:.4f}")
+else:
+    raise ValueError("Optimization failed. Check your data and initial parameters.")
+
+# Step 4: Create a 3D Bell Chart
+fig = plt.figure(figsize=(12, 6))
+
+# Subplot 1: 3D Bell Chart
+ax1 = fig.add_subplot(121, projection='3d')
+
+# Generate data for the bell chart
+x = np.linspace(-3, 3, 100)
+y = np.linspace(-3, 3, 100)
+x, y = np.meshgrid(x, y)
+z = np.exp(-(x**2 + y**2) / 2) / (2 * np.pi)
+
+# Plot the bell chart
+ax1.plot_surface(x, y, z, cmap='viridis', alpha=0.7)
+
+# Highlight the joint probability point for AMAT
+ax1.scatter(correlation_coefficient, data_transformed['AMAT'].mean(), gaussian_copula_density([correlation_coefficient], data_transformed['AMAT']), color='red', s=100, label='Joint Probability (AMAT)')
+
+# Highlight the joint probability point for MRNA
+ax1.scatter(correlation_coefficient, data_transformed['MRNA'].mean(), gaussian_copula_density([correlation_coefficient], data_transformed['MRNA']), color='blue', s=100, label='Joint Probability (MRNA)')
+
+# Lines connecting the red dot to the axes
+ax1.plot([correlation_coefficient, correlation_coefficient], [data_transformed['AMAT'].mean(), 0], [gaussian_copula_density([correlation_coefficient], data_transformed['AMAT']), gaussian_copula_density([correlation_coefficient], data_transformed['AMAT'])], color='red', linestyle='--', alpha=0.7)
+ax1.plot([correlation_coefficient, 0], [data_transformed['AMAT'].mean(), data_transformed['AMAT'].mean()], [gaussian_copula_density([correlation_coefficient], data_transformed['AMAT']), gaussian_copula_density([correlation_coefficient], data_transformed['AMAT'])], color='red', linestyle='--', alpha=0.7)
+
+# Set labels
+ax1.set_xlabel('Correlation Coefficient')
+ax1.set_ylabel('Returns')
+ax1.set_zlabel('Probability Density')
+ax1.set_title('3D Bell Chart - Joint Probability')
+
+# Subplot 2: Heatmap
+ax2 = fig.add_subplot(122)
+
+# Plot the correlation matrix as a heatmap
+sns.heatmap(returns.corr(), cmap='coolwarm', annot=True, fmt=".2f", ax=ax2)
+ax2.set_title('Correlation Heatmap')
+
+# Adjust layout
+plt.tight_layout()
+
+# Show the plot
+plt.show()
